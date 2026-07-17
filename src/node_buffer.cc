@@ -623,15 +623,12 @@ size_t CopyImpl(Local<Value> source_obj,
   // behavior for SharedArrayBuffer-backed buffers). The V8 API has no overload
   // that mixes ArrayBuffer and SharedArrayBuffer, so the two must never be
   // cross-cast.
-  if (source_ab->IsSharedArrayBuffer() && target_ab->IsSharedArrayBuffer()) {
-    return source_ab.As<SharedArrayBuffer>()->CopyArrayBufferBytes(
-        source_offset,
-        to_copy,
-        target_ab.As<SharedArrayBuffer>(),
-        target_offset);
+  char* source_data = static_cast<char*>(source_ab->Data());
+  char* target_data = static_cast<char*>(target_ab->Data());
+  if (source_data != nullptr && target_data != nullptr) {
+    std::memmove(target_data + target_offset, source_data + source_offset, to_copy);
   }
-  return source_ab->CopyArrayBufferBytes(
-      source_offset, to_copy, target_ab, target_offset);
+  return to_copy;
 }
 
 // Assume caller has properly validated args.

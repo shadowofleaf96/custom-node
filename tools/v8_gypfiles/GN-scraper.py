@@ -13,6 +13,17 @@ def DoMain(args):
 
   scraper_re = re.compile(pattern + r'\[([^\]]+)', re.DOTALL)
   matches = scraper_re.search(gn_content)
+  if not matches:
+    # Try with v8_cluster_source_set instead of v8_source_set
+    alt_pattern = pattern.replace('v8_source_set', 'v8_cluster_source_set')
+    alt_pattern = alt_pattern.replace('v8_compiler_sources \\+=', 'sources \\+=')
+    alt_pattern = alt_pattern.replace('torque_files \\+=', 'sources \\+=')
+    scraper_re = re.compile(alt_pattern + r'\[([^\]]+)', re.DOTALL)
+    matches = scraper_re.search(gn_content)
+    if not matches:
+      sys.stderr.write("WARNING: GN-scraper failed to find pattern: " + pattern + "\n")
+      return ""
+
   match = matches.group(1)
   files = []
   for l in match.splitlines():

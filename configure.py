@@ -812,6 +812,12 @@ parser.add_argument('--enable-v8windbg',
     default=None,
     help=argparse.SUPPRESS)  # Undocumented.
 
+parser.add_argument('--enable-v8-multithreading',
+    action='store_true',
+    dest='v8_enable_multithreading',
+    default=None,
+    help='Enable our custom V8 multithreading engine')
+
 parser.add_argument('--enable-trace-maps',
     action='store_true',
     dest='trace_maps',
@@ -2228,6 +2234,7 @@ def configure_v8(o, configs):
   o['variables']['force_dynamic_crt'] = 1 if options.shared else 0
   o['variables']['node_enable_d8'] = b(options.enable_d8)
   o['variables']['node_enable_v8windbg'] = b(options.enable_v8windbg)
+  o['variables']['v8_enable_multithreading'] = 1 if options.v8_enable_multithreading else 0
   if options.enable_d8:
     o['variables']['test_isolation_mode'] = 'noop'  # Needed by d8.gyp.
   if options.without_bundled_v8:

@@ -179,9 +179,46 @@ struct Resolver {
 
 class CalleesPrinter : public clang::RecursiveASTVisitor<CalleesPrinter> {
  public:
-  explicit CalleesPrinter(clang::MangleContext* ctx) : ctx_(ctx) {}
+  explicit CalleesPrinter(clang::MangleContext* ctx,
+                          clang::CXXRecordDecl* no_gc_mole_decl)
+      : ctx_(ctx), no_gc_mole_decl_(no_gc_mole_decl) {}
+
+  struct GCScope {
+    bool is_guarded = false;
+  };
+
+  bool IsGuarded() {
+    for (const auto& s : gc_scopes_) {
+      if (s.is_guarded) return true;
+    }
+    return false;
+  }
+
+  bool TraverseStmt(clang::Stmt* S) {
+    if (!S) return true;
+    bool introduces_scope = IntroducesScope(S);
+    if (introduces_scope) {
+      gc_scopes_.push_back(GCScope());
+    }
+    bool result = clang::RecursiveASTVisitor<CalleesPrinter>::TraverseStmt(S);
+    if (introduces_scope) {
+      gc_scopes_.pop_back();
+    }
+    return result;
+  }
+
+  bool VisitVarDecl(clang::VarDecl* var) {
+    clang::QualType var_type = var->getType();
+    if (IsGCGuard(var_type)) {
+      if (!gc_scopes_.empty()) {
+        gc_scopes_.back().is_guarded = true;
+      }
+    }
+    return true;
+  }
 
   virtual bool VisitCallExpr(clang::CallExpr* expr) {
+    if (IsGuarded()) return true;
     const clang::FunctionDecl* callee = expr->getDirectCallee();
     if (callee != nullptr) AnalyzeFunction(callee);
     return true;
@@ -197,10 +234,11 @@ class CalleesPrinter : public clang::RecursiveASTVisitor<CalleesPrinter> {
   }
 
   void AnalyzeFunction(const clang::FunctionDecl* f) {
+    if (f->isNoReturn()) return;
     if (!InV8Namespace(f)) return;
     MangledName name;
     if (!GetMangledName(ctx_, f, &name)) return;
-    const std::string& function = f->getNameAsString();
+    const std::string function = f->getQualifiedNameAsString();
     AddCallee(name, function);
 
     const clang::FunctionDecl* body = nullptr;
@@ -209,13 +247,25 @@ class CalleesPrinter : public clang::RecursiveASTVisitor<CalleesPrinter> {
       TraverseStmt(body->getBody());
       LeaveScope();
     }
+
+    if (const clang::CXXMethodDecl* method =
+            llvm::dyn_cast<clang::CXXMethodDecl>(f)) {
+      for (const clang::CXXMethodDecl* overridden :
+           method->overridden_methods()) {
+        AddVirtualLink(overridden, method);
+      }
+    }
   }
 
   typedef std::map<MangledName, CalleesSet*> Callgraph;
 
-  bool Analyzed(const MangledName& name) { return callgraph_[name] != nullptr; }
+  bool Analyzed(const MangledName& name) {
+    return analyzed_.find(name) != analyzed_.end();
+  }
 
   void EnterScope(const MangledName& name) {
+    analyzed_.insert(name);
+
     CalleesSet* callees = callgraph_[name];
 
     if (callees == nullptr) {
@@ -232,6 +282,27 @@ class CalleesPrinter : public clang::RecursiveASTVisitor<CalleesPrinter> {
     mangled_to_function_[name] = function;
   }
 
+  void AddVirtualLink(const clang::CXXMethodDecl* base,
+                      const clang::CXXMethodDecl* derived) {
+    if (!InV8Namespace(base) || !InV8Namespace(derived)) return;
+    MangledName base_mangled;
+    MangledName derived_mangled;
+    if (!GetMangledName(ctx_, base, &base_mangled)) return;
+    if (!GetMangledName(ctx_, derived, &derived_mangled)) return;
+
+    const std::string base_function = base->getQualifiedNameAsString();
+    const std::string derived_function = derived->getQualifiedNameAsString();
+
+    mangled_to_function_[base_mangled] = base_function;
+    mangled_to_function_[derived_mangled] = derived_function;
+
+    CalleesSet* callees = callgraph_[base_mangled];
+    if (callees == nullptr) {
+      callgraph_[base_mangled] = callees = new CalleesSet();
+    }
+    callees->insert(derived_mangled);
+  }
+
   void PrintCallGraph() {
     for (Callgraph::const_iterator i = callgraph_.begin(), e = callgraph_.end();
          i != e; ++i) {
@@ -246,11 +317,41 @@ class CalleesPrinter : public clang::RecursiveASTVisitor<CalleesPrinter> {
   }
 
  private:
+  bool IntroducesScope(clang::Stmt* S) {
+    switch (S->getStmtClass()) {
+      case clang::Stmt::CompoundStmtClass:
+      case clang::Stmt::IfStmtClass:
+      case clang::Stmt::ForStmtClass:
+      case clang::Stmt::WhileStmtClass:
+      case clang::Stmt::SwitchStmtClass:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool IsSameType(clang::QualType qtype, clang::CXXRecordDecl* decl) {
+    if (!decl) return false;
+    if (qtype.isNull() || qtype->isNullPtrType()) return false;
+
+    const clang::CXXRecordDecl* record = qtype->getAsCXXRecordDecl();
+    if (!record) return false;
+
+    return record->getCanonicalDecl() == decl->getCanonicalDecl();
+  }
+
+  bool IsGCGuard(clang::QualType qtype) {
+    return IsSameType(qtype, no_gc_mole_decl_);
+  }
+
   clang::MangleContext* ctx_;
+  clang::CXXRecordDecl* no_gc_mole_decl_;
 
   std::stack<CalleesSet*> scopes_;
   Callgraph callgraph_;
   CalleesMap mangled_to_function_;
+  CalleesSet analyzed_;
+  std::vector<GCScope> gc_scopes_;
 };
 
 class FunctionDeclarationFinder
@@ -267,7 +368,13 @@ class FunctionDeclarationFinder
   void HandleTranslationUnit(clang::ASTContext& ctx) override {
     mangle_context_ =
         clang::ItaniumMangleContext::create(ctx, diagnostics_engine_);
-    callees_printer_ = new CalleesPrinter(mangle_context_);
+
+    Resolver r(ctx);
+    auto v8_internal = r.ResolveNamespace("v8").ResolveNamespace("internal");
+    clang::CXXRecordDecl* no_gc_mole_decl =
+        v8_internal.Resolve<clang::CXXRecordDecl>("DisableGCMole");
+
+    callees_printer_ = new CalleesPrinter(mangle_context_, no_gc_mole_decl);
     TraverseDecl(ctx.getTranslationUnitDecl());
     callees_printer_->PrintCallGraph();
   }
@@ -392,7 +499,8 @@ static bool IsSuspectedToCauseGC(clang::MangleContext* ctx,
       suspects_allowlist.end()) {
     return false;
   }
-  if (gc_functions.find(decl->getNameAsString()) != gc_functions.end()) {
+  if (gc_functions.find(decl->getQualifiedNameAsString()) !=
+      gc_functions.end()) {
     TRACE_LLVM_DECL("Suspected by ", decl);
     return true;
   }
@@ -666,6 +774,11 @@ class FunctionAnalyzer {
                    clang::CXXRecordDecl* tagged_index_decl,
                    clang::CXXRecordDecl* cleared_weak_value_decl,
                    clang::ClassTemplateDecl* tagged_decl,
+                   clang::CXXRecordDecl* js_dispatch_handle_decl,
+                   clang::CXXRecordDecl* js_dispatch_handle_member_decl,
+                   clang::ClassTemplateDecl* tagged_member_decl,
+                   clang::ClassTemplateDecl* unaligned_value_member_decl,
+                   clang::CXXRecordDecl* unaligned_double_member_decl,
                    clang::CXXRecordDecl* no_gc_mole_decl,
                    clang::CXXRecordDecl* conservative_pinning_scope_decl,
                    clang::DiagnosticsEngine& d, clang::SourceManager& sm)
@@ -675,6 +788,11 @@ class FunctionAnalyzer {
         tagged_index_decl_(tagged_index_decl),
         cleared_weak_value_decl_(cleared_weak_value_decl),
         tagged_decl_(tagged_decl),
+        js_dispatch_handle_decl_(js_dispatch_handle_decl),
+        js_dispatch_handle_member_decl_(js_dispatch_handle_member_decl),
+        tagged_member_decl_(tagged_member_decl),
+        unaligned_value_member_decl_(unaligned_value_member_decl),
+        unaligned_double_member_decl_(unaligned_double_member_decl),
         no_gc_mole_decl_(no_gc_mole_decl),
         conservative_pinning_scope_decl_(conservative_pinning_scope_decl),
         d_(d),
@@ -951,12 +1069,8 @@ class FunctionAnalyzer {
                  const Environment& env) {
     if (!g_dead_vars_analysis) return ExprEffect::None();
     if (!RepresentsRawPointerType(var_type)) return ExprEffect::None();
-    // We currently care only about our internal pointer types and not about
-    // raw C++ pointers, because normally special care is taken when storing
-    // raw pointers to the managed heap. Furthermore, checking for raw
-    // pointers produces too many false positives in the dead variable
-    // analysis.
-    if (!IsInternalPointerType(var_type)) return ExprEffect::None();
+    // Raw pointer tracking is enabled for HeapObject subclasses and internal
+    // pointer/handle/member types to catch stale pointers across GC calls.
     if (env.IsAlive(var_name)) return ExprEffect::None();
     if (HasActiveGuard()) return ExprEffect::None();
     if (HasActiveConservativePinning(var_location)) return ExprEffect::None();
@@ -1206,10 +1320,12 @@ class FunctionAnalyzer {
   }
 
   DECL_VISIT_STMT(WhileStmt) {
+    scopes_.push_back(GCScope());
     Block block(env, this);
     do {
       block.Loop(stmt->getCond(), stmt->getBody());
     } while (block.changed());
+    scopes_.pop_back();
     return block.out();
   }
 
@@ -1233,24 +1349,30 @@ class FunctionAnalyzer {
   }
 
   DECL_VISIT_STMT(ForStmt) {
+    scopes_.push_back(GCScope());
     Block block(VisitStmt(stmt->getInit(), env), this);
     do {
       block.Loop(stmt->getCond(), stmt->getBody(), stmt->getInc());
     } while (block.changed());
+    scopes_.pop_back();
     return block.out();
   }
 
   DECL_VISIT_STMT(IfStmt) {
+    scopes_.push_back(GCScope());
     Environment init_out = VisitStmt(stmt->getInit(), env);
     Environment cond_out = VisitStmt(stmt->getCond(), init_out);
     Environment then_out = VisitStmt(stmt->getThen(), cond_out);
     Environment else_out = VisitStmt(stmt->getElse(), cond_out);
+    scopes_.pop_back();
     return Environment::Merge(then_out, else_out);
   }
 
   DECL_VISIT_STMT(SwitchStmt) {
+    scopes_.push_back(GCScope());
     Block block(env, this);
     block.Sequential(stmt->getCond(), stmt->getBody());
+    scopes_.pop_back();
     return block.out();
   }
 
@@ -1297,7 +1419,7 @@ class FunctionAnalyzer {
     return record->getDefinition();
   }
 
-  bool IsDerivedFromInternalPointer(const clang::CXXRecordDecl* record) {
+  bool IsTaggedPointer(const clang::CXXRecordDecl* record) {
     if (record == nullptr) return false;
     if (!InV8Namespace(record)) return false;
     auto* specialization =
@@ -1327,7 +1449,38 @@ class FunctionAnalyzer {
                tagged_type_record != cleared_weak_value_decl_;
       }
     }
+    return false;
+  }
 
+  bool IsRawPointerToOnHeapValue(const clang::CXXRecordDecl* record) {
+    if (record == nullptr) return false;
+
+    if (js_dispatch_handle_decl_ &&
+        record->getCanonicalDecl() == js_dispatch_handle_decl_) {
+      return true;
+    }
+    if (js_dispatch_handle_member_decl_ &&
+        record->getCanonicalDecl() == js_dispatch_handle_member_decl_) {
+      return true;
+    }
+    if (unaligned_double_member_decl_ &&
+        record->getCanonicalDecl() == unaligned_double_member_decl_) {
+      return true;
+    }
+
+    auto* specialization =
+        llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(record);
+    if (specialization) {
+      auto* template_decl =
+          specialization->getSpecializedTemplate()->getCanonicalDecl();
+      if ((tagged_member_decl_ && template_decl == tagged_member_decl_) ||
+          (unaligned_value_member_decl_ &&
+           template_decl == unaligned_value_member_decl_)) {
+        return true;
+      }
+    }
+
+    if (!InV8Namespace(record)) return false;
     const clang::CXXRecordDecl* definition = GetDefinitionOrNull(record);
     if (!definition) return false;
     if (IsDerivedFrom(record, heap_object_decl_)) {
@@ -1336,9 +1489,13 @@ class FunctionAnalyzer {
     return false;
   }
 
+  bool IsOnHeapValue(const clang::CXXRecordDecl* record) {
+    return IsTaggedPointer(record) || IsRawPointerToOnHeapValue(record);
+  }
+
   bool IsRawPointerType(const clang::PointerType* type) {
     const clang::CXXRecordDecl* record = type->getPointeeCXXRecordDecl();
-    bool result = IsDerivedFromInternalPointer(record);
+    bool result = IsRawPointerToOnHeapValue(record);
     TRACE("is raw " << result << " "
                     << (record ? record->getNameAsString() : "nullptr"));
     return result;
@@ -1346,7 +1503,11 @@ class FunctionAnalyzer {
 
   bool IsInternalPointerType(clang::QualType qtype) {
     const clang::CXXRecordDecl* record = qtype->getAsCXXRecordDecl();
-    bool result = IsDerivedFromInternalPointer(record);
+    if (record && js_dispatch_handle_decl_ &&
+        record->getCanonicalDecl() == js_dispatch_handle_decl_) {
+      return false;
+    }
+    bool result = IsOnHeapValue(record);
     TRACE_LLVM_TYPE("is internal " << result, qtype);
     return result;
   }
@@ -1527,6 +1688,11 @@ class FunctionAnalyzer {
   clang::CXXRecordDecl* tagged_index_decl_;
   clang::CXXRecordDecl* cleared_weak_value_decl_;
   clang::ClassTemplateDecl* tagged_decl_;
+  clang::CXXRecordDecl* js_dispatch_handle_decl_;
+  clang::CXXRecordDecl* js_dispatch_handle_member_decl_;
+  clang::ClassTemplateDecl* tagged_member_decl_;
+  clang::ClassTemplateDecl* unaligned_value_member_decl_;
+  clang::CXXRecordDecl* unaligned_double_member_decl_;
   clang::CXXRecordDecl* no_gc_mole_decl_;
   clang::CXXRecordDecl* conservative_pinning_scope_decl_;
 
@@ -1638,6 +1804,21 @@ class ProblemsFinder : public clang::ASTConsumer,
     clang::ClassTemplateDecl* tagged_decl =
         v8_internal.Resolve<clang::ClassTemplateDecl>("Tagged");
 
+    clang::CXXRecordDecl* js_dispatch_handle_decl =
+        v8_internal.Resolve<clang::CXXRecordDecl>("JSDispatchHandle");
+
+    clang::CXXRecordDecl* js_dispatch_handle_member_decl =
+        v8_internal.Resolve<clang::CXXRecordDecl>("JSDispatchHandleMember");
+
+    clang::ClassTemplateDecl* tagged_member_decl =
+        v8_internal.Resolve<clang::ClassTemplateDecl>("TaggedMember");
+
+    clang::ClassTemplateDecl* unaligned_value_member_decl =
+        v8_internal.Resolve<clang::ClassTemplateDecl>("UnalignedValueMember");
+
+    clang::CXXRecordDecl* unaligned_double_member_decl =
+        v8_internal.Resolve<clang::CXXRecordDecl>("UnalignedDoubleMember");
+
     if (heap_object_decl != nullptr) {
       heap_object_decl = heap_object_decl->getDefinition();
     }
@@ -1654,12 +1835,38 @@ class ProblemsFinder : public clang::ASTConsumer,
       tagged_decl = tagged_decl->getCanonicalDecl();
     }
 
+    if (js_dispatch_handle_decl != nullptr) {
+      js_dispatch_handle_decl = js_dispatch_handle_decl->getCanonicalDecl();
+    }
+
+    if (js_dispatch_handle_member_decl != nullptr) {
+      js_dispatch_handle_member_decl =
+          js_dispatch_handle_member_decl->getCanonicalDecl();
+    }
+
+    if (tagged_member_decl != nullptr) {
+      tagged_member_decl = tagged_member_decl->getCanonicalDecl();
+    }
+
+    if (unaligned_value_member_decl != nullptr) {
+      unaligned_value_member_decl =
+          unaligned_value_member_decl->getCanonicalDecl();
+    }
+
+    if (unaligned_double_member_decl != nullptr) {
+      unaligned_double_member_decl =
+          unaligned_double_member_decl->getCanonicalDecl();
+    }
+
     if (heap_object_decl != nullptr && smi_decl != nullptr &&
         tagged_index_decl != nullptr && tagged_decl != nullptr) {
       function_analyzer_ = new FunctionAnalyzer(
           clang::ItaniumMangleContext::create(ctx, d_), heap_object_decl,
           smi_decl, tagged_index_decl, cleared_weak_value_decl, tagged_decl,
-          no_gc_mole_decl, conservative_pinning_scope_decl, d_, sm_);
+          js_dispatch_handle_decl, js_dispatch_handle_member_decl,
+          tagged_member_decl, unaligned_value_member_decl,
+          unaligned_double_member_decl, no_gc_mole_decl,
+          conservative_pinning_scope_decl, d_, sm_);
       TraverseDecl(ctx.getTranslationUnitDecl());
     } else if (g_verbose) {
       if (heap_object_decl == nullptr) {

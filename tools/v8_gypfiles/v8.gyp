@@ -127,21 +127,17 @@
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-debug-readers.cc",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-debug-readers.h",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-forward-declarations.h",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-verifiers.cc",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-verifiers.h",
+
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/csa-types.h",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/debug-macros.cc",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/debug-macros.h",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/enum-verifiers.cc",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/exported-macros-assembler.cc",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/exported-macros-assembler.h",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/factory.cc",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/factory.inc",
+
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/instance-types.h",
             "<(SHARED_INTERMEDIATE_DIR)/torque-generated/interface-descriptors.inc",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/objects-body-descriptors-inl.inc",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/objects-printer.cc",
-            "<(SHARED_INTERMEDIATE_DIR)/torque-generated/visitor-lists.h",
+
             '<@(torque_outputs_csa_cc)',
             '<@(torque_outputs_csa_h)',
             '<@(torque_outputs_inl_inc)',
@@ -224,10 +220,7 @@
       'direct_dependent_settings': {
         'sources': [
           '<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-forward-declarations.h',
-          '<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-verifiers.cc',
-          '<(SHARED_INTERMEDIATE_DIR)/torque-generated/class-verifiers.h',
-          '<(SHARED_INTERMEDIATE_DIR)/torque-generated/factory.cc',
-          '<(SHARED_INTERMEDIATE_DIR)/torque-generated/objects-printer.cc',
+
           '<@(torque_outputs_inl_inc)',
           '<@(torque_outputs_cc)',
           '<@(torque_outputs_inc)',
@@ -1341,12 +1334,26 @@
              '<!@pymod_do_main(GN-scraper "<(V8_ROOT)/BUILD.gn"  "\\"v8_base_without_compiler.*?v8_enable_i18n_support.*?sources -= ")',
            ],
          }],
+        ['v8_enable_multithreading==1', {
+          'sources': [
+            '<(V8_ROOT)/src/threading/thread-pool.h',
+            '<(V8_ROOT)/src/threading/thread-pool.cc',
+            '<(V8_ROOT)/src/threading/task.h',
+            '<(V8_ROOT)/src/threading/channel.h',
+            '<(V8_ROOT)/src/threading/channel.cc',
+            '<(V8_ROOT)/src/threading/mutex.h',
+            '<(V8_ROOT)/src/threading/mutex.cc',
+            '<(V8_ROOT)/src/threading/serializer.h',
+            '<(V8_ROOT)/src/threading/serializer.cc',
+            '<(V8_ROOT)/src/builtins/builtins-thread.cc',
+            '<(V8_ROOT)/src/builtins/builtins-parallel-array.cc',
+          ],
+          'defines': ['V8_ENABLE_MULTITHREADING'],
+        }],
         ['v8_postmortem_support', {
           'dependencies': ['postmortem-metadata#target'],
         }],
         # Platforms that don't have Compare-And-Swap (CAS) support need to link atomic library
-        # to implement atomic memory access.
-        # Clang needs it for some atomic operations (https://clang.llvm.org/docs/Toolchain.html#atomics-library).
         ['(OS=="linux" and clang==1) or (v8_current_cpu in ["mips64", "mips64el", "arm", "riscv64", "loong64"])', {
           'link_settings': {
             'libraries': ['-latomic', ],
@@ -1439,6 +1446,10 @@
       'dependencies': [
         'v8_headers',
         'abseil.gyp:abseil',
+      ],
+
+      'include_dirs': [
+        '<(V8_ROOT)/third_party/llvm-libc/src',
       ],
 
       'conditions': [
@@ -1677,8 +1688,28 @@
             '<(V8_ROOT)/src/base/platform/platform-posix-time.h',
             '<(V8_ROOT)/src/base/platform/platform-posix-time.cc',
           ],
-        }
-         ],
+        }],
+        ['v8_target_arch=="ia32" or v8_target_arch=="x64" or v8_target_arch=="x86"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-x86.cc' ],
+        }],
+        ['v8_target_arch=="arm" or v8_target_arch=="arm64"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-arm.cc' ],
+        }],
+        ['v8_target_arch=="riscv64"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-riscv.cc' ],
+        }],
+        ['v8_target_arch=="loong64"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-loong64.cc' ],
+        }],
+        ['v8_target_arch=="mips64" or v8_target_arch=="mips64el"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-mips64.cc' ],
+        }],
+        ['v8_target_arch=="ppc64"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-ppc.cc' ],
+        }],
+        ['v8_target_arch=="s390x"', {
+          'sources': [ '<(V8_ROOT)/src/base/cpu/cpu-s390.cc' ],
+        }],
       ],
     },  # v8_libbase
     {

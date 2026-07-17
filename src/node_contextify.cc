@@ -200,9 +200,7 @@ void ContextifyContext::InitializeGlobalTemplates(IsolateData* isolate_data) {
   Local<ObjectTemplate> global_object_template =
       global_func_template->InstanceTemplate();
 
-  PropertyHandlerFlags flags = static_cast<PropertyHandlerFlags>(
-      static_cast<int>(PropertyHandlerFlags::kHasNoSideEffect) |
-      static_cast<int>(PropertyHandlerFlags::kHasDontDeleteProperty));
+  PropertyHandlerFlags flags = PropertyHandlerFlags::kHasNoSideEffect;
   NamedPropertyHandlerConfiguration config(PropertyGetterCallback,
                                            PropertySetterCallback,
                                            PropertyQueryCallback,

@@ -60,6 +60,9 @@
     # Enable disassembler for `--print-code` v8 options
     'v8_enable_disassembler': 1,
 
+    # Enable our custom V8 multithreading engine
+    'v8_enable_multithreading%': 0,
+
     # Sets -dOBJECT_PRINT.
     'v8_enable_object_print%': 1,
 
