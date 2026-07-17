@@ -63,6 +63,7 @@
         '<(ABSEIL_ROOT)/absl/base/internal/sysinfo.cc',
         '<(ABSEIL_ROOT)/absl/base/internal/thread_identity.h',
         '<(ABSEIL_ROOT)/absl/base/internal/thread_identity.cc',
+        '<(ABSEIL_ROOT)/absl/base/throw_delegate.cc',
         '<(ABSEIL_ROOT)/absl/base/internal/tracing.h',
         '<(ABSEIL_ROOT)/absl/base/internal/tracing.cc',
         '<(ABSEIL_ROOT)/absl/base/internal/tsan_mutex_interface.h',
