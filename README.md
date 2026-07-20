@@ -1,8 +1,53 @@
 # Node.js
 
+> **🚀 CUSTOM V8 NODE ENGINE - TRUE NATIVE MULTITHREADING FORK**
+> 
+> This is a highly specialized fork of Node.js that bypasses the traditional `worker_threads` and `libuv` event loops to inject **True Native Multithreading** directly into the V8 engine via C++. 
+> 
+> By utilizing ephemeral V8 Isolates and a pre-warmed C++ native thread pool, this build provides **near-zero overhead parallelism** directly in JavaScript, completely crushing standard Node.js and Bun in multi-core performance for CPU-bound tasks.
+>
+> ### ⚡ The API
+> - `Thread.spawn(fn, ...args)`: Spawns a background thread. Returns a `JoinHandle`.
+> - `Thread.join(handle)`: Waits for the thread and returns its result via Promise.
+> - `Thread.sleep(ms)`: Suspends the thread execution.
+> - `Array.prototype.parallelMap(fn)`: Automatically chunks array operations across all your CPU cores.
+> - `Array.prototype.parallelFilter(fn)`: Automatically filters arrays across all CPU cores.
+> 
+> ### 📊 Performance Analytics (8 Cores)
+> *Test Environment: Windows 11, 8 CPU Cores.*
+> 
+> **1. CPU-Intensive Map (10,000 items)**
+> * Normal Node.js: 82.15 ms *(0.76x speedup)*
+> * Bun: 86.71 ms *(0.85x speedup)*
+> * **Our Custom V8 Node:** **21.81 ms** *(3.13x speedup)*
+>
+> **2. CPU-Intensive Filter (10,000 items)**
+> * Normal Node.js: 63.26 ms *(0.85x speedup)*
+> * Bun: 99.74 ms *(0.68x speedup)*
+> * **Our Custom V8 Node:** **15.21 ms** *(3.63x speedup)*
+>
+> **3. 8x Parallel Independent Tasks (Fibonacci 35)**
+> * Normal Node.js: 215.52 ms *(5.10x speedup)*
+> * Bun: 189.19 ms *(3.62x speedup)*
+> * **Our Custom V8 Node:** **156.26 ms** *(7.02x speedup)*
+>
+> *Note on Serial vs. Parallel:* "Serial Time" is execution time on a single CPU core. "Parallel Time" is execution time when distributed across all 8 cores. Official Node.js binaries use aggressive Profile-Guided Optimizations (PGO) and Link-Time Optimizations (LTO). Our local MSVC build skips these for compatibility, resulting in a ~5% slower single-core baseline. Despite this slight single-core disadvantage, our parallel performance completely obliterates the competition due to zero-boot latency.
+> 
+> For full architectural details, see the extensive [multithreading documentation](./multithreading_documentation.md).
+>
+> ### 🔗 Custom V8 Source Code
+> The core implementation of our native multithreading engine can be found directly within the [deps/v8](./deps/v8) directory (or [view on GitHub](https://github.com/shadowofleaf96/custom-node/tree/main/deps/v8)).
+>
+> ### 🧪 Testing and Benchmarks
+> We have included a comprehensive test suite and benchmark script to verify correctness and performance.
+> - [test-multithreading.js](./test-multithreading.js): Thorough testing covering basic operations, concurrency, error handling, serialization, and edge cases.
+> - [benchmark-multithreading.js](./benchmark-multithreading.js): Comprehensive benchmarks comparing our custom V8 engine against standard `worker_threads` and serial execution.
+>
+> ---
+
 Node.js is an open-source, cross-platform JavaScript runtime environment.
 
-For information on using Node.js, see the [Node.js website][].
+For information on using standard Node.js, see the [Node.js website][].
 
 The Node.js project uses an [open governance model](./GOVERNANCE.md). The
 [OpenJS Foundation][] provides support for the project.

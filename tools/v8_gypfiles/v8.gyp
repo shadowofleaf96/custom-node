@@ -51,6 +51,9 @@
       }
     },
     'conditions': [
+      ['v8_enable_multithreading==1', {
+        'defines': [ 'V8_ENABLE_MULTITHREADING' ],
+      }],
       # Build with -fvisibility=hidden and -fvisibility-inlines-hidden to avoid
       # including unnecessary internal symbols, which may lead to run-time fixups.
       # This is not done on AIX where symbols are exported by tools/create_expfile.sh
@@ -1348,7 +1351,6 @@
             '<(V8_ROOT)/src/builtins/builtins-thread.cc',
             '<(V8_ROOT)/src/builtins/builtins-parallel-array.cc',
           ],
-          'defines': ['V8_ENABLE_MULTITHREADING'],
         }],
         ['v8_postmortem_support', {
           'dependencies': ['postmortem-metadata#target'],

@@ -516,6 +516,9 @@
       ['v8_enable_v8_checks == 1', {
         'defines': ['V8_ENABLE_CHECKS'],
       }],
+      ['v8_enable_multithreading == 1', {
+        'defines': ['V8_ENABLE_MULTITHREADING'],
+      }],
       ['v8_enable_pointer_compression == 1', {
         'defines': ['V8_COMPRESS_POINTERS'],
       }],

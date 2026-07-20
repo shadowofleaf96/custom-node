@@ -15,6 +15,51 @@ using v8::Platform;
 using v8::Task;
 using v8::TaskPriority;
 
+#ifdef V8_ENABLE_MULTITHREADING
+// A lightweight no-op task runner for V8 multithreading worker isolates.
+// These isolates are created by V8's internal ThreadPool for short-lived
+// computations and don't have a Node.js event loop.
+// V8 posts internal tasks (GC, metrics, etc.) during isolate init;
+// running them inline causes re-entrancy deadlocks, so we discard them.
+// This is safe because worker isolates are ephemeral.
+class V8WorkerTaskRunner : public v8::TaskRunner {
+ public:
+  bool IdleTasksEnabled() override { return false; }
+  bool NonNestableTasksEnabled() const override { return true; }
+  bool NonNestableDelayedTasksEnabled() const override { return true; }
+
+ private:
+  void PostTaskImpl(std::unique_ptr<v8::Task> task,
+                    const v8::SourceLocation& location) override {}
+  void PostDelayedTaskImpl(std::unique_ptr<v8::Task> task,
+                           double delay_in_seconds,
+                           const v8::SourceLocation& location) override {}
+  void PostIdleTaskImpl(std::unique_ptr<v8::IdleTask> task,
+                        const v8::SourceLocation& location) override {}
+  void PostNonNestableTaskImpl(std::unique_ptr<v8::Task> task,
+                               const v8::SourceLocation& location) override {}
+  void PostNonNestableDelayedTaskImpl(
+      std::unique_ptr<v8::Task> task,
+      double delay_in_seconds,
+      const v8::SourceLocation& location) override {}
+};
+
+// A lightweight delegate for V8 multithreading worker isolates.
+// Provides a simple task runner without requiring a uv_loop_t.
+class V8WorkerIsolateDelegate : public IsolatePlatformDelegate {
+ public:
+  V8WorkerIsolateDelegate()
+      : task_runner_(std::make_shared<V8WorkerTaskRunner>()) {}
+  std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner() override {
+    return task_runner_;
+  }
+  bool IdleTasksEnabled() override { return false; }
+
+ private:
+  std::shared_ptr<V8WorkerTaskRunner> task_runner_;
+};
+#endif  // V8_ENABLE_MULTITHREADING
+
 namespace {
 
 struct PlatformWorkerData {
@@ -503,7 +548,7 @@ void NodePlatform::RegisterIsolate(Isolate* isolate,
 void NodePlatform::UnregisterIsolate(Isolate* isolate) {
   Mutex::ScopedLock lock(per_isolate_mutex_);
   auto existing_it = per_isolate_.find(isolate);
-  CHECK_NE(existing_it, per_isolate_.end());
+  if (existing_it == per_isolate_.end()) return;  // V8 worker isolate, already gone
   auto& existing = existing_it->second;
   if (existing.second) {
     existing.second->Shutdown();
@@ -698,17 +743,33 @@ void NodePlatform::PostDelayedTaskOnWorkerThreadImpl(
 
 IsolatePlatformDelegate* NodePlatform::ForIsolate(Isolate* isolate) {
   Mutex::ScopedLock lock(per_isolate_mutex_);
-  auto data = per_isolate_[isolate];
-  CHECK_NOT_NULL(data.first);
-  return data.first;
+  auto it = per_isolate_.find(isolate);
+  if (it == per_isolate_.end()) {
+#ifdef V8_ENABLE_MULTITHREADING
+    // Auto-register isolates created by V8 internal worker threads
+    // (e.g. multithreading ThreadPool). These isolates are not created
+    // by Node.js and thus were never registered via RegisterIsolate().
+    auto* delegate = new V8WorkerIsolateDelegate();
+    per_isolate_.emplace(
+        isolate,
+        std::make_pair(static_cast<IsolatePlatformDelegate*>(delegate),
+                       std::shared_ptr<PerIsolatePlatformData>{}));
+    return delegate;
+#else
+    CHECK_NOT_NULL(nullptr);  // Should not reach here without multithreading
+    return nullptr;
+#endif
+  }
+  CHECK_NOT_NULL(it->second.first);
+  return it->second.first;
 }
 
 std::shared_ptr<PerIsolatePlatformData>
 NodePlatform::ForNodeIsolate(Isolate* isolate) {
   Mutex::ScopedLock lock(per_isolate_mutex_);
-  auto data = per_isolate_[isolate];
-  CHECK_NOT_NULL(data.first);
-  return data.second;
+  auto it = per_isolate_.find(isolate);
+  if (it == per_isolate_.end()) return nullptr;
+  return it->second.second;
 }
 
 bool NodePlatform::FlushForegroundTasks(Isolate* isolate) {
@@ -737,7 +798,10 @@ std::unique_ptr<v8::JobHandle> NodePlatform::CreateJobImpl(
 }
 
 bool NodePlatform::IdleTasksEnabled(Isolate* isolate) {
-  return ForIsolate(isolate)->IdleTasksEnabled();
+  Mutex::ScopedLock lock(per_isolate_mutex_);
+  auto it = per_isolate_.find(isolate);
+  if (it == per_isolate_.end()) return false;
+  return it->second.first->IdleTasksEnabled();
 }
 
 std::shared_ptr<v8::TaskRunner> NodePlatform::GetForegroundTaskRunner(

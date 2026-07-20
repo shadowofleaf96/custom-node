@@ -815,7 +815,7 @@ parser.add_argument('--enable-v8windbg',
 parser.add_argument('--enable-v8-multithreading',
     action='store_true',
     dest='v8_enable_multithreading',
-    default=None,
+    default=True,
     help='Enable our custom V8 multithreading engine')
 
 parser.add_argument('--enable-trace-maps',
