@@ -90,6 +90,28 @@ Extensive benchmarking was performed comparing **Normal Node.js (`worker_threads
 ### Benchmark 1: CPU-Intensive Map
 *Mapping 10,000 array elements with heavy mathematical operations.*
 
+**Normal Node.js & Bun:**
+```javascript
+// Requires manual array chunking, spawning Workers, and message passing
+const chunkSize = Math.ceil(arrayData.length / 8);
+for (let i = 0; i < 8; i++) {
+  const chunk = arrayData.slice(i * chunkSize, (i + 1) * chunkSize);
+  const worker = new Worker('worker.js', { workerData: chunk });
+  worker.on('message', handleResult);
+}
+// Inside worker.js: 
+// const result = chunk.map(x => { let sum=0; for(let i=0; i<10000; i++) sum+=i*x; return sum; });
+```
+
+**Custom V8 Node Engine:**
+```javascript
+const result = await arrayData.parallelMap(x => {
+  let sum = 0;
+  for(let i=0; i<10000; i++) sum += i*x;
+  return sum;
+});
+```
+
 | Runtime                    | Serial Time    | Parallel Time   | Speedup vs Serial |
 | :------------------------- | :------------- | :-------------- | :------ |
 | Normal Node.js             |       62.78 ms |         82.15 ms |   0.76x |
@@ -101,6 +123,23 @@ Extensive benchmarking was performed comparing **Normal Node.js (`worker_threads
 ### Benchmark 2: CPU-Intensive Filter
 *Filtering 10,000 array elements using a heavy computation condition.*
 
+**Normal Node.js & Bun:**
+```javascript
+// Requires tedious manual chunking, spawning workers, and merging logic
+const worker = new Worker('worker.js', { workerData: chunk });
+// Inside worker.js:
+// const result = chunk.filter(n => { let sum=0; for(let i=0; i<5000; i++) sum+=(i*n)%7; return sum%2===0; });
+```
+
+**Custom V8 Node Engine:**
+```javascript
+const result = await arrayData.parallelFilter(n => {
+  let sum = 0;
+  for(let i=0; i<5000; i++) sum += (i*n)%7;
+  return sum % 2 === 0;
+});
+```
+
 | Runtime                    | Serial Time    | Parallel Time   | Speedup vs Serial |
 | :------------------------- | :------------- | :-------------- | :------ |
 | Normal Node.js             |       53.77 ms |         63.26 ms |   0.85x |
@@ -111,6 +150,27 @@ Extensive benchmarking was performed comparing **Normal Node.js (`worker_threads
 
 ### Benchmark 3: Parallel Independent Tasks
 *Executing 8 instances of `Fibonacci(35)` simultaneously.*
+
+**Normal Node.js & Bun:**
+```javascript
+const handles = [];
+for (let i = 0; i < 8; i++) {
+  const worker = new Worker('worker.js', { workerData: 35 });
+  // Wait for worker.on('message', ...)
+}
+```
+
+**Custom V8 Node Engine:**
+```javascript
+const handles = [];
+for (let i = 0; i < 8; i++) {
+  handles.push(Thread.spawn(n => {
+    function fib(x) { return x <= 1 ? x : fib(x - 1) + fib(x - 2); }
+    return fib(n);
+  }, 35));
+}
+const results = await Promise.all(handles.map(h => Thread.join(h)));
+```
 
 | Runtime                    | Serial Time    | Parallel Time   | Speedup vs Serial |
 | :------------------------- | :------------- | :-------------- | :------ |
