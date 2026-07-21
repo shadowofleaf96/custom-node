@@ -60,4 +60,4 @@ We put Normal Node, Bun, and Our Custom Engine through extreme edge cases to obs
 
 Our engine successfully matches Bun's optimized performance, while simultaneously supporting the entire ecosystem of standard Node.js asynchronous APIs, and completely destroying Bun's severe multi-threading memory leak.
 
-For full architectural details, see the extensive [multithreading documentation](../multithreading_documentation.md).
+For full architectural details, see the extensive [multithreading documentation](https://github.com/shadowofleaf96/custom-node/blob/main/multithreading_documentation.md).
