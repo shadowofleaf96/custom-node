@@ -1,4 +1,4 @@
-# 🚀 CUSTOM NODE.js — THE PRE-WARMED POOL ENGINE
+# 🚀 CUSTOM NODE — THE PRE-WARMED POOL ENGINE
 
 This is a highly specialized fork of Node.js that fundamentally solves the boot-latency problem of standard `worker_threads` by implementing **The Ultimate Pre-Warmed Node Pool**. 
 
