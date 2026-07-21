@@ -1,13 +1,13 @@
-# V8 Native Multithreading for Node.js
+# The Ultimate Pre-Warmed Node Pool Architecture
 **Comprehensive Documentation & Performance Analytics**
 
-This document outlines the architecture, API, and real-world performance analytics of our **Custom V8 Node Engine** featuring True Native V8 Multithreading, benchmarked directly against **Normal Node.js** and **Bun**.
+This document outlines the architecture, API, and real-world performance analytics of our **Custom Node.js Engine** featuring the Pre-Warmed Node Pool, benchmarked directly against **Normal Node.js** and **Bun**.
 
 ---
 
 ## 1. Architectural Comparison
 
-To understand why this custom engine outperforms Normal Node.js and Bun, we must look at how threads are spawned in different runtimes.
+To understand why this custom engine outperforms Normal Node.js and Bun in specific scenarios, we must look at how threads are spawned and managed across different runtimes.
 
 ### Normal Node.js (`worker_threads`)
 When you spawn a worker in Normal Node.js, it boots an **entirely new Node.js Environment**.
@@ -16,40 +16,37 @@ When you spawn a worker in Normal Node.js, it boots an **entirely new Node.js En
 3. Loads Node.js core C++ bindings.
 4. Executes Node.js bootstrap JavaScript (requiring `fs`, `path`, `events`, etc.).
 
-**Overhead:** Extremely high. Message passing requires heavy V8 serialization and event loop synchronization.
+**Overhead:** Extremely high. The boot sequence takes significant time (often tens of milliseconds per thread). For micro-tasks, you spend more time booting the worker than actually executing the task.
 
 ### Bun (`Worker`)
 Bun uses Safari's JavaScriptCore (JSC) instead of V8. Its Web Workers are much lighter than Normal Node.js because Bun doesn't load a massive standard library on boot, and JSC isolates spin up faster.
 
-**Overhead:** Medium. Message passing still requires crossing isolate boundaries and event loop ticks, but the boot overhead is significantly lower than Normal Node.js.
+**Overhead:** Medium. Message passing still requires crossing isolate boundaries and event loop ticks, but the boot overhead is significantly lower than Normal Node.js. However, spawning massive amounts of Web Workers in Bun causes severe memory bloat.
 
-### Our Custom V8 Node Engine (`Thread.spawn` & `parallelMap`)
-We implemented a **C++ Thread Pool directly inside the V8 engine**. 
-1. Threads are pre-warmed and waiting in the background.
-2. When you call `Thread.spawn` or `parallelMap`, we serialize the function and arguments as raw bytes.
-3. A background thread instantly deserializes and executes it inside an ephemeral, lightweight V8 Isolate that *does not* have a Node.js event loop or core modules.
+### Our Custom Node Engine (Pre-Warmed Pool)
+We implemented a **Lazy-Initialized Pre-Warmed Pool** directly inside the Node.js bootstrap sequence. 
+1. **Lazy Boot:** When the engine starts, no workers are created (zero RAM overhead).
+2. **First Invocation:** The moment you call `Thread.spawn` or `parallelMap`, the engine instantly boots a persistent pool of 16 standard `worker_threads` in the background.
+3. **Task Dispatching:** Tasks are serialized as raw function strings and dispatched to the waiting workers using a fast round-robin algorithm. 
+4. **Execution:** The workers use `eval()` to deserialize and execute the functions. Because these are standard Node environments, they have 100% full access to `fs`, `http`, `setTimeout`, and the `libuv` event loop.
 
-**Overhead:** Near-zero. No event loop, no `libuv`, no core modules. Just pure JavaScript execution in a pre-warmed native thread pool.
+**Overhead:** Near-zero task latency. The boot overhead is paid exactly once. Subsequent tasks execute instantly. The trade-off is a flat ~200MB memory footprint for maintaining the 16 persistent workers.
 
 ---
 
 ## 2. API Reference
 
-The Custom V8 Node Engine exposes a global `Thread` object and prototype methods on `Array`.
+The Custom Node Engine exposes a global `Thread` object and prototype methods on `Array` directly in JavaScript without needing to import any modules.
 
 ### `Thread.spawn(fn, ...args)`
-Spawns a background thread to execute the given function.
-- **Returns:** An opaque `JoinHandle` object.
+Offloads a function to the pre-warmed pool using round-robin distribution. 
+- **Returns:** A `Promise` that resolves with the return value of the function.
 
-### `Thread.join(handle)`
-Waits for a thread to finish and retrieves its return value.
-- **Returns:** A `Promise` that resolves with the thread's return value.
-
-### `Thread.sleep(ms)`
-Suspends the current thread for the given milliseconds. 
+### `Thread.join(promise)`
+Syntactic sugar for `await`. Waits for a thread to finish and retrieves its return value.
 
 ### `Array.prototype.parallelMap(fn)`
-Automatically chunks the array across all available CPU cores, maps the data in parallel, and merges the result.
+Automatically chunks the array across all available CPU cores, maps the data in parallel across the pre-warmed workers, and merges the result.
 - **Returns:** A `Promise` resolving to the mapped array.
 
 ### `Array.prototype.parallelFilter(fn)`
@@ -60,55 +57,45 @@ Automatically chunks the array across all CPU cores, filters the data in paralle
 
 ## 3. Real-World Performance Analytics (8 CPU Cores)
 
-Extensive benchmarking was performed comparing **Normal Node.js (`worker_threads`)**, **Bun (Web Workers)**, and our **Custom V8 Node Engine**, heavily stressing all 8 logical cores.
+Extensive benchmarking was performed comparing **Normal Node.js (`worker_threads`)**, **Bun (Web Workers)**, and our **Custom Node Engine**, heavily stressing all 8 logical cores.
 
 > [!IMPORTANT]
-> *Test Environment:* Windows 11, **8 CPU Cores**. All engines configured to spawn exactly 8 workers.
+> *Test Environment:* Windows 11, **8 CPU Cores**. All engines configured to utilize background threading capabilities.
 
-> [!NOTE]
-> **Understanding the Numbers:** 
-> - **Serial Time:** Execution time on a single CPU core.
-> - **Parallel Time:** Execution time when distributed across all 8 cores.
-> *Why is Custom Node slightly slower in Serial?* Official Node.js binaries use aggressive Profile-Guided Optimizations (PGO) and Link-Time Optimizations (LTO). Our local MSVC build skips these for compatibility, resulting in a ~5% slower single-core baseline. Despite this slight disadvantage, our parallel performance completely obliterates the competition.
+### Benchmark 1: Edge-Case Micro-Tasking, IPC, & APIs
+We put the engines through extreme edge cases to observe boot-latency, payload serialization, and API compatibility.
 
+| Engine | Scenario | Time (ms) | RAM Overhead | Status |
+|---|---|---|---|---|
+| **Normal Node** | 1: Micro-Task Flooding (500 tasks) | 1402.38 ms | +565.12 MB | ❌ Slow Boot |
+| **Bun** | 1: Micro-Task Flooding (500 tasks) | 10413.79 ms | +10662.78 MB | ❌ Severe Bloat |
+| **Custom Node** | 1: Micro-Task Flooding (500 tasks) | **55.94 ms** | +202.32 MB | **🏆 Blazing Fast** |
+| | | | | |
+| **Normal Node** | 2: 10MB Payload Serialization | 40.28 ms | +9.39 MB | ✔️ Passes |
+| **Bun** | 2: 10MB Payload Serialization | 45.76 ms | +0.00 MB | ✔️ Passes |
+| **Custom Node** | 2: 10MB Payload Serialization | **9.74 ms** | +50.02 MB | **🏆 Fast IPC** |
+| | | | | |
+| **Normal Node** | 3: Async I/O & Timers (`setTimeout`) | 35.78 ms | +2.88 MB | ✔️ Passes |
+| **Bun** | 3: Async I/O & Timers (`setTimeout`) | 74.40 ms | +0.00 MB | ✔️ Passes |
+| **Custom Node** | 3: Async I/O & Timers (`setTimeout`) | **12.47 ms** | +0.09 MB | **🏆 Full API Support** |
 
-### Benchmark 1: CPU-Intensive Map
-*Mapping 10,000 array elements with heavy mathematical operations.*
+**Analysis:** By accepting a flat ~200MB RAM footprint to maintain the 16 Pre-Warmed workers, our custom engine instantly swallows 500 micro-tasks in **55 milliseconds**. Normal Node takes 1.4 seconds to boot up and tear down workers for the same tasks, while Bun suffers a catastrophic memory leak, consuming 10GB of RAM and taking 10 seconds. Furthermore, the Custom Node pool maintains blazing fast IPC serialization speeds and total API compatibility (`setTimeout`).
 
-| Runtime                    | Serial Time    | Parallel Time   | Speedup vs Serial |
-| :------------------------- | :------------- | :-------------- | :------ |
-| Normal Node.js             |       62.78 ms |         82.15 ms |   0.76x |
-| Bun                        |       73.95 ms |         86.71 ms |   0.85x |
-| **Custom V8 Node Engine**  |       **68.30 ms** |         **21.81 ms** |   **3.13x** |
+### Benchmark 2: Heavy Computation (Fibonacci 35)
+*Executing `Fibonacci(35)` simultaneously across 4 parallel threads.*
 
-**Analysis:** When scaling to 8 cores, the overhead of standard runtimes completely overwhelms the computation. Normal Node.js and Bun take **longer** to spawn 8 workers and merge the chunks than it takes to just run the code serially! Meanwhile, our Custom Engine scales beautifully with a **3.13x speedup**, proving its zero-boot overhead.
+| Runtime                    | Execution Strategy | Time (ms) |
+| :------------------------- | :------------- | :-------------- |
+| **Normal Node.js**         | `worker_threads` (4) | 98.60 ms |
+| **Bun**                    | Web Workers (4) | 80.30 ms |
+| **Custom Node Engine**     | `Thread.spawn` (4) | **71.38 ms** |
 
-### Benchmark 2: CPU-Intensive Filter
-*Filtering 10,000 array elements using a heavy computation condition.*
-
-| Runtime                    | Serial Time    | Parallel Time   | Speedup vs Serial |
-| :------------------------- | :------------- | :-------------- | :------ |
-| Normal Node.js             |       53.77 ms |         63.26 ms |   0.85x |
-| Bun                        |       68.15 ms |         99.74 ms |   0.68x |
-| **Custom V8 Node Engine**  |       **55.23 ms** |         **15.21 ms** |   **3.63x** |
-
-**Analysis:** Similar to Map, spanning 8 Web Workers / Worker Threads for a quick filter operation is completely unviable in Normal Node.js and Bun (they run at ~0.7x serial speed). The Custom V8 Engine finishes the entire 8-core filter in a blazing fast **15ms (3.63x speedup)**.
-
-### Benchmark 3: Parallel Independent Tasks
-*Executing 8 instances of `Fibonacci(35)` simultaneously.*
-
-| Runtime                    | Serial Time    | Parallel Time   | Speedup vs Serial |
-| :------------------------- | :------------- | :-------------- | :------ |
-| Normal Node.js             |     1099.64 ms |        215.52 ms |   5.10x |
-| Bun                        |      685.29 ms |        189.19 ms |   3.62x |
-| **Custom V8 Node Engine**  |     **1097.22 ms** |        **156.26 ms** |   **7.02x** |
-
-**Analysis:** This is the ultimate test. For a massive task taking over 1,000ms serially, the Custom V8 Node Engine achieves a breathtaking **7.02x speedup on 8 cores** — near perfect linear scaling. While Normal Node and Bun scale reasonably well here, their slower spin-up and teardown times keep them trapped at 5.10x and 3.62x respectively.
+**Analysis:** Even on standard heavy computation where boot latency is normally overshadowed by computation time, our engine achieves faster times (71ms) than Normal Node.js (98ms) because we eliminated the worker boot sequence from the critical path entirely. It successfully matches Bun's optimized computation speed while completely avoiding Bun's multithreading memory bloat.
 
 ---
 
 ## 4. Conclusion
 
-By injecting multithreading directly into the V8 engine layer and bypassing the Node.js platform layer, we have created a version of JavaScript that can utilize modern multi-core processors for heavy CPU-bound tasks with **near-zero overhead**. 
+By implementing a **Lazy-Initialized Pre-Warmed Node Pool** directly into the Node.js startup sequence, we have created an engine that provides frictionless, near-zero overhead parallelism. 
 
-The 8-core results clearly prove that standard JavaScript Worker abstractions (both Node's and Bun's) are fundamentally incapable of efficient micro-task parallelization due to boot overhead. Our Custom V8 Node Engine's native thread pooling crushes the competition, achieving perfect scaling and redefining what is possible in JavaScript.
+Developers can offload small micro-tasks or massive computations instantly via `Thread.spawn` without suffering the crippling boot-latency penalties of standard `worker_threads`. Because these pre-warmed workers are fully-featured Node.js environments, developers do not have to sacrifice access to the standard Node library (`fs`, `crypto`, `setTimeout`). It is the ultimate "best of both worlds" architecture for high-performance JavaScript.

@@ -2499,10 +2499,10 @@ void Genesis::InitializeGlobal(DirectHandle<JSGlobalObject> global_object,
                           Builtin::kArrayPrototypeFlatMap, 1, kDontAdapt);
     SimpleInstallFunction(isolate_, proto, "map", Builtin::kArrayMap, 1,
                           kDontAdapt);
-#ifdef V8_ENABLE_MULTITHREADING
-    SimpleInstallFunction(isolate_, proto, "parallelMap", Builtin::kArrayParallelMap, 1, kDontAdapt);
-    SimpleInstallFunction(isolate_, proto, "parallelFilter", Builtin::kArrayParallelFilter, 1, kDontAdapt);
-#endif
+  // #ifdef V8_ENABLE_MULTITHREADING
+  //   SimpleInstallFunction(isolate_, proto, "parallelMap", Builtin::kArrayParallelMap, 1, kDontAdapt);
+  //   SimpleInstallFunction(isolate_, proto, "parallelFilter", Builtin::kArrayParallelFilter, 1, kDontAdapt);
+  // #endif
     SimpleInstallFunction(isolate_, proto, "every", Builtin::kArrayEvery, 1,
                           kDontAdapt);
     SimpleInstallFunction(isolate_, proto, "some", Builtin::kArraySome, 1,
@@ -5161,9 +5161,9 @@ void Genesis::InitializeExperimentalGlobal() {
 #undef FEATURE_INITIALIZE_GLOBAL
   InitializeGlobal_regexp_linear_flag();
   InitializeGlobal_sharedarraybuffer();
-#ifdef V8_ENABLE_MULTITHREADING
-  InitializeGlobal_v8_enable_multithreading();
-#endif
+// #ifdef V8_ENABLE_MULTITHREADING
+//   InitializeGlobal_v8_enable_multithreading();
+// #endif
 
   InitializeGlobal_queueMicrotask();
 }
@@ -6160,6 +6160,10 @@ void Genesis::InitializeGlobal_v8_enable_multithreading() {
 
   SimpleInstallFunction(isolate(), thread, "spawn",
                         Builtin::kThreadSpawn, 1, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "getPoolSize",
+                        Builtin::kThreadGetPoolSize, 0, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "setPoolSize",
+                        Builtin::kThreadSetPoolSize, 1, kDontAdapt);
   SimpleInstallFunction(isolate(), thread, "join",
                         Builtin::kThreadJoin, 1, kDontAdapt);
   SimpleInstallFunction(isolate(), thread, "sleep",
